@@ -1,182 +1,148 @@
-cert-manager
+# cert-manager
 
-Command-line utility built with Go and Cobra, designed to manage SSL/TLS certificates across multiple targets through their respective APIs.
-This document serves as the development backlog and technical overview of the features to be implemented.
+Command-line utility built with Go and Cobra to manage SSL/TLS certificates across multiple targets via their APIs.  
+This document doubles as a technical overview and development backlog.
 
-Overview
+## Overview
 
-The goal of cert-manager is to centralize the management of certificates for multiple systems (e.g., OPNsense) by allowing users to add, retrieve, update, and set active certificates via simple CLI commands.
-All targets and credentials are defined in a .env file containing environment variables for each system:
+The goal is to centralize certificate management for multiple systems (e.g., OPNsense) by adding, retrieving, updating, and activating certificates through CLI commands.
 
+Targets and credentials are stored in a `.env` file using the following convention:
+
+```
 <target_name>_key=<api_key>
 <target_name>_secret=<api_secret>
 <target_name>_url=<api_base_url>
 <target_name>_type=<system_type>
+```
 
-TO DO – Core Features
-1. Target Management
+## Core Features
 
-Command:
+### 1. Target Management
 
+**Command**
+
+```
 cert-manager add target -n <target_name> -k <key> -s <secret> -u <url> -t <type>
+```
 
+**Description**  
+Adds a new target system to `.env`, persisting credentials and configuration details. All parameters are mandatory.
 
-Description:
-Allows users to add a new target system to the .env file, storing credentials and configuration details.
-All parameters are mandatory.
+**Expected behavior**
+- Validate that the target name does not already exist.
+- Append new entries to `.env` in the required format.
+- Prepare groundwork for future `update` and `delete` subcommands.
 
-Expected behavior:
+**TO DO**
+- Avoid printing secrets to stdout.
+- Add stronger duplicate validation.
+- Extract `.env` parsing/writing to dedicated helpers.
 
-Validate that the target name does not already exist.
+### 2. Certificate Retrieval *(WIP)*
 
-Append new entries to .env in the required format.
+**Command**
 
-Support update and delete subcommands for future versions.
-
-TO DO:
-
-Implement secure handling (avoid printing secrets to stdout).
-
-Add validation for duplicate targets.
-
-Implement .env file parser and writer module.
-
-2. Certificate Retrieval
-
-Command:
-
+```
 cert-manager get certificate expiration -t <target1,target2> | -A
+```
 
+**Description**  
+Retrieves certificates for the selected targets (or all with `-A`) and prints metadata.
 
-Description:
-Retrieves all certificates from specified targets or all (-A), and lists them with relevant metadata.
+**Example output**
 
-Example Output:
-
+```
 TargetName       CertificateName        ExpirationDate       CommonName
 ------------------------------------------------------------------------
 OPNSense1        webgui-cert            2026-04-05           opnsense.local
 OPNSense2        vpn-cert               2025-12-12           vpn.example.com
+```
 
+**TO DO**
+- Parse `.env` to resolve target selections.
+- Support multiple target types (OPNSense, etc.).
+- Implement per-type API calls (OPNSense: `/api/trust/certificates`).
+- Provide `--json` and `--table` formatting options.
 
-TO DO:
+### 3. Certificate Upload
 
-Parse the .env to identify selected targets.
+**Command**
 
-Handle multiple target types (OPNSense, etc.).
-
-Implement per-type API logic:
-
-For OPNSense: /api/trust/certificates
-
-Add formatting options (--json, --table).
-
-3. Certificate Upload
-
-Command:
-
+```
 cert-manager add certificate -t <target1,target2> -c <cert_file>
+```
 
+**Description**  
+Uploads a new certificate to one or more targets via their API.
 
-Description:
-Uploads a new certificate to one or more targets using their API.
+**TO DO**
+- Validate certificate formats (PEM, CRT, etc.).
+- Add handlers per target type (OPNSense: `POST /api/trust/certificates`).
+- Summarize results per target (success/error).
 
-TO DO:
+### 4. Certificate Metadata Management
 
-Validate certificate format (PEM, CRT, etc.).
+**Command**
 
-Add handler for each target type:
-
-For OPNSense: POST to /api/trust/certificates
-
-Display summary after upload:
-
-Target OPNSense1: Certificate uploaded successfully
-Target OPNSense2: Error - Unauthorized
-
-4. Certificate Metadata Management
-
-Command:
-
+```
 cert-manager add certificate -c <cert_file> -k <key_file> -n <cert_name>
+```
 
+**Description**  
+Stores certificate metadata locally for staging and synchronization workflows.
 
-Description:
-Adds a certificate to the local environment with metadata for later use (e.g., staging, synchronization).
+**TO DO**
+- Persist metadata in a structured store (JSON or SQLite).
+- Enforce unique certificate names.
 
-TO DO:
+### 5. Set SSL for WebGUI
 
-Store the certificate details in a local database or structured file (e.g., JSON or SQLite).
+**Command**
 
-Implement validation for unique certificate names.
-
-5. Set SSL for WebGUI
-
-Command:
-
+```
 cert-manager set-ssl -t <target>
+```
 
+**Description**  
+Fetches certificates from a target and lets the user choose which one to apply to the system WebGUI.
 
-Description:
-Fetches the list of available certificates from the target and allows the user to select which one to use for the system’s WebGUI.
+**Expected flow**
+- Fetch `/api/trust/certificates`.
+- Present selectable list to the user.
+- Send the API call to set the WebGUI certificate.
 
-Expected Flow:
+**TO DO**
+- Implement interactive selection (Cobra prompt or TUI).
+- Define per-target endpoint (OPNSense: likely `/api/system/webgui`).
+- Improve success/failure messaging.
 
-Fetch /api/trust/certificates.
+## Enhancements
 
-Present a selectable list of certificates.
+### 6. Environment Management
+- Support multiple `.env` profiles (e.g., `--env staging.env`).
+- Add `cert-manager list targets` to view configured systems quickly.
 
-User selects one.
+### 7. Error Handling
+- Standardize error responses.
+- Retry transient API errors.
 
-Perform API call to set WebGUI certificate.
+### 8. Logging and Output
+- Add `--verbose` and `--debug` flags.
+- Provide JSON output for automation pipelines.
 
-TO DO:
+### 9. Security
+- Encrypt `.env` secrets (AES or external storage).
+- Prevent credentials from appearing in logs.
 
-Implement interactive selection (using Cobra prompt or TUI).
+### 10. Testing and CI
+- Unit tests for `.env` parsing, API clients, and CLI handlers.
+- Integration tests for OPNsense targets.
+- Optional GitHub Actions for linting, tests, and builds.
 
-Define API endpoint per target type for setting the active cert.
+## Architecture (Planned)
 
-For OPNSense: likely /api/system/webgui
-
-Handle success/failure messages cleanly.
-
-TO DO – Enhancements
-6. Environment Management
-
-Support multiple .env profiles (e.g., --env staging.env).
-
-Add cert-manager list targets to quickly view configured systems.
-
-7. Error Handling
-
-Implement standardized error responses.
-
-Include retries for transient API errors.
-
-8. Logging and Output
-
-Add --verbose and --debug flags.
-
-Support JSON output for automation pipelines.
-
-9. Security
-
-Encrypt .env secrets using AES or external key storage (future phase).
-
-Prevent credentials from appearing in logs.
-
-10. Testing and CI
-
-Unit tests for .env parser, API clients, and CLI handlers.
-
-Integration tests for OPNsense-type targets.
-
-Optional: GitHub Actions workflow for linting, tests, and builds.
-
-Architecture (TO DO)
-
-Modules:
-
+```
 cmd/
   ├── root.go
   ├── add.go
@@ -192,22 +158,15 @@ internal/
   └── utils/
       ├── formatter.go
       └── logger.go
+```
 
+**TO DO**
+- Implement modular structure for maintainability.
+- Create a unified API interface across system types.
 
-TO DO:
-
-Implement modular structure for maintainability.
-
-Create unified API interface for all supported systems.
-
-Future Features (Backlog)
-
-cert-manager renew – Automated renewal and re-upload.
-
-cert-manager sync – Sync local and remote certs.
-
-cert-manager validate – Validate certificate chain and expiration.
-
-Integration with external CAs (e.g., Let’s Encrypt, AWS ACM).
-
-TUI dashboard for target overview.
+## Future Features (Backlog)
+- `cert-manager renew` – Automated renewal and re-upload.
+- `cert-manager sync` – Sync local and remote certs.
+- `cert-manager validate` – Validate certificate chain and expiration.
+- Integrations with external CAs (Let’s Encrypt, AWS ACM, etc.).
+- TUI dashboard for target overview.
