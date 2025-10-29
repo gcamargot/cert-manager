@@ -22,6 +22,7 @@ var addTargetCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(addCmd)
+
 	addCmd.AddCommand(addTargetCmd)
 
 	addTargetCmd.Flags().StringP("name", "n", "", "Nombre del target")

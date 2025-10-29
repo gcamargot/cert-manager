@@ -70,11 +70,12 @@ OPNSense2        vpn-cert               2025-12-12           vpn.example.com
 **Command**
 
 ```
-cert-manager add certificate -t <target1,target2> -c <cert_file>
+cert-manager upload certificate -t <target1,target2> -c <cert_file>
+cert-manager upload certificate -t <target1,target2> -a <alias_registrado>
 ```
 
 **Description**  
-Uploads a new certificate to one or more targets via their API.
+Uploads a new certificate to one or more targets via their API. The command accepts either a PEM bundle, separate certificate/key files, or an alias previously registered with `cert-manager add certificate`.
 
 **TO DO**
 - Validate certificate formats (PEM, CRT, etc.).
@@ -92,11 +93,37 @@ cert-manager add certificate -c <cert_file> -k <key_file> -n <cert_name>
 **Description**  
 Stores certificate metadata locally for staging and synchronization workflows.
 
+**Notes**
+- Requires specifying the country code (`--country`) when the certificate does not include it.
+- Certificates are stored under `~/.cert-manager/certificates.json` and can later be reused with `cert-manager upload certificate -a <alias>`.
+
+### 5. Certificate Update
+
+**Command**
+
+```
+cert-manager update certificate -n <cert_name> -c <cert_file> [-k <key_file>] [--country <code>]
+```
+
+**Description**
+Updates a previously registered certificate by backing up the old PEM under `~/.cert-manager/backups/` (including the prior expiration date in the filename) and refreshing the local metadata with the new file paths, CN, expiration, and country.
+
+### 6. Certificate Inventory
+
+**Command**
+
+```
+cert-manager list certificates
+```
+
+**Description**  
+Shows the locally stored certificates with their common name, country, expiration date, and file path, refreshing metadata from disk.
+
 **TO DO**
 - Persist metadata in a structured store (JSON or SQLite).
 - Enforce unique certificate names.
 
-### 5. Set SSL for WebGUI
+### 7. Set SSL for WebGUI
 
 **Command**
 
@@ -119,23 +146,23 @@ Fetches certificates from a target and lets the user choose which one to apply t
 
 ## Enhancements
 
-### 6. Environment Management
+### 8. Environment Management
 - Support multiple `.env` profiles (e.g., `--env staging.env`).
 - Add `cert-manager list targets` to view configured systems quickly.
 
-### 7. Error Handling
+### 9. Error Handling
 - Standardize error responses.
 - Retry transient API errors.
 
-### 8. Logging and Output
+### 10. Logging and Output
 - Add `--verbose` and `--debug` flags.
 - Provide JSON output for automation pipelines.
 
-### 9. Security
+### 11. Security
 - Encrypt `.env` secrets (AES or external storage).
 - Prevent credentials from appearing in logs.
 
-### 10. Testing and CI
+### 12. Testing and CI
 - Unit tests for `.env` parsing, API clients, and CLI handlers.
 - Integration tests for OPNsense targets.
 - Optional GitHub Actions for linting, tests, and builds.
