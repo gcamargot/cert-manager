@@ -39,11 +39,12 @@ var (
 		RunE:  runSetSSL,
 	}
 
-	setSSLTarget   string
-	setSSLCertName string
-	setSSLUser     string
-	setSSLPassword string
-	setSSLUseGUI   bool
+	setSSLTarget           string
+	setSSLCertName         string
+	setSSLUser             string
+	setSSLPassword         string
+	setSSLUseGUI           bool
+	setSSLInteractiveLogin bool
 )
 
 func init() {
@@ -54,6 +55,7 @@ func init() {
 	setSSLCmd.Flags().StringVarP(&setSSLUser, "username", "u", "", "Usuario del WebGUI")
 	setSSLCmd.Flags().StringVarP(&setSSLPassword, "password", "p", "", "Contraseña del WebGUI (no recomendado en plano)")
 	setSSLCmd.Flags().BoolVar(&setSSLUseGUI, "gui", false, "Usar simulación de GUI en lugar de modificación directa de XML")
+	setSSLCmd.Flags().BoolVarP(&setSSLInteractiveLogin, "login", "l", false, "Solicitar credenciales de WebGUI de forma interactiva")
 
 	setSSLCmd.MarkFlagRequired("target")
 }
@@ -71,7 +73,27 @@ func runSetSSL(cmd *cobra.Command, args []string) error {
 	}
 
 	username := strings.TrimSpace(setSSLUser)
-	if username == "" {
+	password := strings.TrimSpace(setSSLPassword)
+
+	if !setSSLInteractiveLogin {
+		if username == "" {
+			username = strings.TrimSpace(lookupTargetEnvCredential(target.name, "user"))
+			if verbose && username != "" {
+				fmt.Printf("[set-ssl] Usuario obtenido desde entorno (%s_user)\n", target.name)
+			}
+		}
+		if password == "" {
+			password = strings.TrimSpace(lookupTargetEnvCredential(target.name, "pw"))
+			if password == "" {
+				password = strings.TrimSpace(lookupTargetEnvCredential(target.name, "password"))
+			}
+			if verbose && password != "" {
+				fmt.Printf("[set-ssl] Contraseña obtenida desde entorno (%s_pw/password)\n", target.name)
+			}
+		}
+	}
+
+	if setSSLInteractiveLogin || username == "" {
 		var err error
 		username, err = promptLine("Usuario WebGUI: ")
 		if err != nil {
@@ -83,13 +105,13 @@ func runSetSSL(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	password := setSSLPassword
-	if password == "" {
+	if setSSLInteractiveLogin || password == "" {
 		var err error
 		password, err = promptPassword("Contraseña WebGUI: ")
 		if err != nil {
 			return err
 		}
+		password = strings.TrimSpace(password)
 		if password == "" {
 			return fmt.Errorf("la contraseña no puede ser vacía")
 		}
@@ -898,6 +920,32 @@ func hostFromURL(raw string) (string, error) {
 		return "", fmt.Errorf("no se pudo extraer el host de %s", raw)
 	}
 	return host, nil
+}
+
+func lookupTargetEnvCredential(targetName, suffix string) string {
+	name := strings.TrimSpace(targetName)
+	keySuffix := strings.TrimSpace(suffix)
+	if name == "" || keySuffix == "" {
+		return ""
+	}
+
+	candidates := []string{
+		name + "_" + keySuffix,
+		strings.ToUpper(name) + "_" + strings.ToUpper(keySuffix),
+		strings.ToLower(name) + "_" + strings.ToLower(keySuffix),
+	}
+
+	seen := make(map[string]struct{})
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		if value := strings.TrimSpace(os.Getenv(candidate)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func extractCurrentCertID(configXML []byte) string {

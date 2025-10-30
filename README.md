@@ -16,6 +16,8 @@ Targets and credentials are stored in a `.env` file using the following conventi
 <target_name>_type=<system_type>
 ```
 
+The CLI keeps a plain-text `targetlist` file (one target name per line). `cert-manager add target` updates both files so subsequent runs load the new entry automatically.
+
 ## Core Features
 
 ### 1. Target Management
@@ -30,13 +32,13 @@ cert-manager add target -n <target_name> -k <key> -s <secret> -u <url> -t <type>
 Adds a new target system to `.env`, persisting credentials and configuration details. All parameters are mandatory.
 
 **Expected behavior**
-- Validate that the target name does not already exist.
-- Append new entries to `.env` in the required format.
-- Prepare groundwork for future `update` and `delete` subcommands.
+- Validate that the target name does not already exist (both in-memory and on disk).
+- Append new entries to `.env` in the required format and update the `targetlist` file used at startup.
+- Refresh the in-memory target registry so subsequent commands can use the new target immediately.
 
 **TO DO**
 - Avoid printing secrets to stdout.
-- Add stronger duplicate validation.
+- Add `update`/`delete` flows for existing targets.
 - Extract `.env` parsing/writing to dedicated helpers.
 
 ### 2. Certificate Retrieval
@@ -48,7 +50,10 @@ cert-manager get certificate expiration -t <target1,target2> | -A
 ```
 
 **Description**  
-Retrieves certificates for the selected targets (or all with `-A`) and prints metadata.
+Retrieves certificates for the selected targets (or all with `-A`) and prints metadata for each remote system.  
+- Output defaults to a colorized ASCII table that highlights the active certificate (`*` in the `Active` column) and paints expiration dates green (valid), red (expired) or gray (inactive certificates).  
+- `--output json` is available for scripting-friendly consumption.  
+- Currently implemented for OPNsense targets via `/api/trust/cert/search` plus `/api/system/webgui/get` to detect the WebGUI certificate in use.
 
 **Example output**
 
@@ -71,12 +76,15 @@ cert-manager upload certificate -t <target1,target2> -a <alias_registrado>
 ```
 
 **Description**  
-Uploads a new certificate to one or more targets via their API. The command accepts either a PEM bundle, separate certificate/key files, or an alias previously registered with `cert-manager add certificate`.
+Uploads a new certificate to one or more targets. Sources supported:
+- Direct PEM bundle (`--cert`), optionally accompanied by a private key (`--key`).
+- A previously registered alias (`--alias`) created with `cert-manager add certificate`.
+
+Only OPNsense targets are supported today. The command parses metadata, enforces mandatory country codes, and posts to `/api/trust/cert/add`.
 
 **TO DO**
-- Validate certificate formats (PEM, CRT, etc.).
-- Add handlers per target type (OPNSense: `POST /api/trust/certificates`).
-- Summarize results per target (success/error).
+- Extend upload handlers to other target types.
+- Improve per-target reporting and rollback on partial failures.
 
 ### 4. Certificate Metadata Management
 
@@ -93,6 +101,7 @@ Stores certificate metadata locally for staging and synchronization workflows.
 - Requires specifying the country code (`--country`) when the certificate does not include it.
 - Certificates are stored under `~/.cert-manager/certificates.json` and can later be reused with `cert-manager upload certificate -a <alias>`.
 - A copia del PEM original se almacena en `~/.cert-manager/<alias>.pem` para integraciones posteriores.
+- Duplicate aliases are prevented (`add certificate` refuses duplicates).
 
 ### 5. Certificate Update
 
@@ -114,11 +123,7 @@ cert-manager list certificates
 ```
 
 **Description**  
-Shows the locally stored certificates with their common name, country, expiration date, and file path, refreshing metadata from disk.
-
-**TO DO**
-- Persist metadata in a structured store (JSON or SQLite).
-- Enforce unique certificate names.
+Shows the locally stored certificates with their common name, country, expiration date, file path, and current parsing status. The command refreshes metadata from disk before printing and persists any corrections back to `~/.cert-manager/certificates.json`.
 
 ### 7. Set SSL for WebGUI
 
@@ -129,17 +134,19 @@ cert-manager set-ssl -t <target>
 ```
 
 **Description**  
-Fetches certificates from a target and lets the user choose (interactively or via `--cert`) which one to apply to the system WebGUI. Requires WebGUI credentials (`-u/-p` flags or prompts) because the operation se realiza mediante la interfaz tradicional `diag_backup.php`.
+Fetches certificates from a target and lets the user choose (interactively or via `--cert`) which one to apply to the system WebGUI. Requires WebGUI credentials (`-u/-p` flags or prompts) because the operation manipula la configuración a través de `diag_backup.php`.
 
-**Expected flow**
-- Fetch `/api/trust/certificates`.
-- Present selectable list to the user.
-- Send the API call to set the WebGUI certificate.
+**Current flow**
+- Authenticate against the OPNsense WebGUI (session API + legacy login fallback).
+- Download the current `config.xml` (POST + GET fallback), update `<ssl-certref>` and re-upload it with CSRF protection.
+- After restoration, wait for the appliance to come back online by pinging (up to 5 min) and verify the applied certificate by re-downloading the configuration.
+- Verbose mode (`-v`) surfaces detailed progress and diagnostics.
+- WebGUI credentials se obtienen automáticamente del entorno (`<target>_user` / `<target>_pw`) o de las flags `--username/--password`. Use `--login` (`-l`) para forzar el ingreso interactivo.
 
 **TO DO**
-- Implement interactive selection (Cobra prompt or TUI).
-- Define per-target endpoint (OPNSense: likely `/api/system/webgui`).
-- Improve success/failure messaging.
+- Implement the pending `--gui` simulation mode.
+- Improve detection of WebGUI availability beyond ICMP (e.g., HTTPS health checks).
+- Support additional target types beyond OPNsense.
 
 ## Enhancements
 
@@ -152,8 +159,8 @@ Fetches certificates from a target and lets the user choose (interactively or vi
 - Retry transient API errors.
 
 ### 10. Logging and Output
-- Add `--verbose` and `--debug` flags.
-- Provide JSON output for automation pipelines.
+- `--verbose` flag already surfaces detailed HTTP flow (e.g., `set-ssl`). Consider adding `--debug` for wire-level tracing.
+- Extend colorized/table output to other commands and provide a `--no-color` escape hatch.
 
 ### 11. Security
 - Encrypt `.env` secrets (AES or external storage).
