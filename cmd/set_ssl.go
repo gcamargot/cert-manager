@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -194,10 +196,23 @@ func runSetSSL(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no se pudo restaurar la configuración: %w", err)
 	}
 
-	if verbose {
-		fmt.Println("[set-ssl] Esperando unos segundos para que OPNsense procese la configuración...")
+	hostForPing, hostErr := hostFromURL(baseURL)
+	const pingTimeout = 5 * time.Minute
+	if hostErr == nil {
+		if verbose {
+			fmt.Printf("[set-ssl] Esperando a que %s responda ping (timeout %s)...\n", hostForPing, pingTimeout)
+		}
+		if err := waitForHostPing(ctx, hostForPing, pingTimeout); err != nil {
+			if verbose {
+				fmt.Printf("[set-ssl] Ping falló: %v\n", err)
+			}
+			fmt.Printf("Certificado \"%s\" (%s) aplicado. El WebGUI se reiniciará automáticamente.\n", selected.Name, selected.ID)
+			fmt.Printf("ADVERTENCIA: El host %s no respondió al ping dentro de %s; no se pudo verificar que el cambio se aplicó correctamente.\n", hostForPing, pingTimeout)
+			return nil
+		}
+	} else if verbose {
+		fmt.Printf("[set-ssl] No se pudo extraer el host para ping: %v\n", hostErr)
 	}
-	time.Sleep(5 * time.Second)
 
 	// Verificar que el cambio se aplicó correctamente
 	verifyConfigXML, err := downloadOPNsenseConfig(session, baseURL)
@@ -595,7 +610,7 @@ func setWebGUICertificate(configXML []byte, certID string) ([]byte, error) {
 				}
 				indent := configXML[lineStart:insertPos]
 				indentStr := string(indent)
-				
+
 				var buffer bytes.Buffer
 				buffer.Write(configXML[:end])
 				buffer.WriteString("\n")
@@ -627,7 +642,7 @@ func setWebGUICertificate(configXML []byte, certID string) ([]byte, error) {
 				}
 				indent := configXML[lineStart:insertPos]
 				indentStr := string(indent)
-				
+
 				var buffer bytes.Buffer
 				buffer.Write(configXML[:end])
 				buffer.WriteString("\n")
@@ -658,7 +673,7 @@ func setWebGUICertificate(configXML []byte, certID string) ([]byte, error) {
 		}
 		indent := configXML[lineStart:insertPos]
 		indentStr := string(indent)
-		
+
 		var buffer bytes.Buffer
 		buffer.Write(configXML[:insertPos])
 		buffer.WriteString("\n")
@@ -789,7 +804,7 @@ func uploadConfigViaDiagBackup(client *http.Client, baseURL string, xml []byte, 
 	alertDangerRe := regexp.MustCompile(`(?i)(?s)<div[^>]*class=['"][^'"]*alert[^'"]*danger[^'"]*['"][^>]*>(.*?)</div>`)
 	alertDangerMatches := alertDangerRe.FindSubmatch(respBody)
 	hasAlertDanger := len(alertDangerMatches) > 0
-	
+
 	// Extraer el mensaje si hay alert-danger
 	var dangerMsg string
 	if hasAlertDanger && len(alertDangerMatches) > 1 {
@@ -799,9 +814,9 @@ func uploadConfigViaDiagBackup(client *http.Client, baseURL string, xml []byte, 
 		dangerMsg = regexp.MustCompile(`\s+`).ReplaceAllString(dangerMsg, " ")
 		dangerMsg = strings.TrimSpace(dangerMsg)
 	}
-	
+
 	hasAlertSuccess := bytes.Contains(respBody, []byte("alert-success")) || bytes.Contains(respBody, []byte("Configuration restored")) || bytes.Contains(respBody, []byte("configuration has been restored"))
-	
+
 	// Solo fallar si hay un mensaje de error claro y no hay éxito
 	if hasAlertDanger && !hasAlertSuccess && dangerMsg != "" && len(dangerMsg) > 10 {
 		if verbose {
@@ -809,7 +824,7 @@ func uploadConfigViaDiagBackup(client *http.Client, baseURL string, xml []byte, 
 		}
 		return fmt.Errorf("OPNsense rechazó la restauración: %s", dangerMsg)
 	}
-	
+
 	// Si no hay alert-danger claro, considerar como exitoso (OPNsense muestra la página normal después de restaurar)
 	if verbose && !hasAlertSuccess {
 		fmt.Println("[set-ssl] Restauración aparentemente exitosa (sin errores detectados)")
@@ -823,6 +838,66 @@ func uploadConfigViaDiagBackup(client *http.Client, baseURL string, xml []byte, 
 	}
 
 	return nil
+}
+
+func waitForHostPing(ctx context.Context, host string, timeout time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout esperando ping a %s después de %s", host, timeout)
+		}
+
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		cmd := exec.CommandContext(pingCtx, "ping", "-c", "1", "-W", "1", host)
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+		err := cmd.Run()
+		cancel()
+		if err == nil {
+			return nil
+		}
+
+		var execErr *exec.Error
+		if errors.As(err, &execErr) && execErr.Err == exec.ErrNotFound {
+			return fmt.Errorf("comando ping no disponible en el sistema: %w", err)
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("timeout esperando ping a %s después de %s", host, timeout)
+		}
+
+		pause := 3 * time.Second
+		if pause > remaining {
+			pause = remaining
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pause):
+		}
+	}
+}
+
+func setSSLCertificateViaGUI(client *http.Client, baseURL string, token csrfToken, certID, certName string) error {
+	return fmt.Errorf("la opción --gui aún no está implementada; use el modo estándar")
+}
+
+func hostFromURL(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", err
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("no se pudo extraer el host de %s", raw)
+	}
+	return host, nil
 }
 
 func extractCurrentCertID(configXML []byte) string {
