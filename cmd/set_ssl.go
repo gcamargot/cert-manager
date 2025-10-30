@@ -41,6 +41,7 @@ var (
 	setSSLCertName string
 	setSSLUser     string
 	setSSLPassword string
+	setSSLUseGUI   bool
 )
 
 func init() {
@@ -50,6 +51,7 @@ func init() {
 	setSSLCmd.Flags().StringVarP(&setSSLCertName, "cert", "c", "", "Nombre del certificado (columna Certificate) o UUID")
 	setSSLCmd.Flags().StringVarP(&setSSLUser, "username", "u", "", "Usuario del WebGUI")
 	setSSLCmd.Flags().StringVarP(&setSSLPassword, "password", "p", "", "Contraseña del WebGUI (no recomendado en plano)")
+	setSSLCmd.Flags().BoolVar(&setSSLUseGUI, "gui", false, "Usar simulación de GUI en lugar de modificación directa de XML")
 
 	setSSLCmd.MarkFlagRequired("target")
 }
@@ -122,6 +124,14 @@ func runSetSSL(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if setSSLUseGUI {
+		if verbose {
+			fmt.Println("[set-ssl] Usando simulación de GUI para configurar certificado")
+		}
+		return setSSLCertificateViaGUI(session, baseURL, csrfToken, selected.ID, selected.Name)
+	}
+
+	// Método original: modificación directa de XML
 	// Intentar descargar con POST primero
 	if verbose {
 		fmt.Println("[set-ssl] Intentando descarga con POST: https://" + strings.TrimPrefix(strings.TrimPrefix(baseURL, "https://"), "http://") + "/diag_backup.php")
