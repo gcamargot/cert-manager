@@ -96,6 +96,7 @@ Stores certificate metadata locally for staging and synchronization workflows.
 **Notes**
 - Requires specifying the country code (`--country`) when the certificate does not include it.
 - Certificates are stored under `~/.cert-manager/certificates.json` and can later be reused with `cert-manager upload certificate -a <alias>`.
+- A copia del PEM original se almacena en `~/.cert-manager/<alias>.pem` para integraciones posteriores.
 
 ### 5. Certificate Update
 
@@ -132,7 +133,7 @@ cert-manager set-ssl -t <target>
 ```
 
 **Description**  
-Fetches certificates from a target and lets the user choose which one to apply to the system WebGUI.
+Fetches certificates from a target and lets the user choose (interactively or via `--cert`) which one to apply to the system WebGUI. Requires WebGUI credentials (`-u/-p` flags or prompts) because the operation se realiza mediante la interfaz tradicional `diag_backup.php`.
 
 **Expected flow**
 - Fetch `/api/trust/certificates`.

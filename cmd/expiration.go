@@ -46,6 +46,7 @@ func init() {
 }
 
 type certificateSummary struct {
+	ID         string `json:"id,omitempty"`
 	Name       string `json:"name,omitempty"`
 	Expiration string `json:"expiration,omitempty"`
 	CommonName string `json:"commonName,omitempty"`
@@ -348,6 +349,7 @@ func buildCertificateFromMap(m map[string]interface{}) *certificateSummary {
 		return nil
 	}
 
+	id := firstNonEmptyString(m, "refid", "uuid", "id")
 	name := firstNonEmptyString(m, "descr", "description", "name", "certificate", "uuid", "id")
 	commonName := firstNonEmptyString(m, "common_name", "commonName", "subject_cn", "subjectCN", "cn")
 	if commonName == "" {
@@ -372,6 +374,7 @@ func buildCertificateFromMap(m map[string]interface{}) *certificateSummary {
 	}
 
 	return &certificateSummary{
+		ID:         id,
 		Name:       name,
 		CommonName: commonName,
 		Expiration: expiration,

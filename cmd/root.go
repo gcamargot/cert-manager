@@ -25,6 +25,8 @@ type Target struct {
 
 var TargetList []Target
 
+var verbose bool
+
 var (
 	rootCmd = &cobra.Command{
 		Use:   "cert-updater",
@@ -56,6 +58,9 @@ func init() {
 	// will be global for your application.
 
 	cobra.OnInitialize(loadAllTargets)
+	if rootCmd.PersistentFlags().Lookup("verbose") == nil {
+		rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Muestra detalles adicionales del proceso")
+	}
 	// rootCmd.PersistentFlags().StringVar(&cert, "cert", "", "")
 	// rootCmd.PersistentFlags().StringVar(&pkey, "pkey", "", "")
 	// Cobra also supports local flags, which will only run
