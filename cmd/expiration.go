@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -21,8 +20,9 @@ import (
 
 var (
 	certificateCmd = &cobra.Command{
-		Use:   "certificate",
-		Short: "Operaciones relacionadas con certificados",
+		Use:     "certificate",
+		Short:   "Operaciones relacionadas con certificados",
+		Aliases: []string{"certificates"},
 	}
 
 	expirationCmd = &cobra.Command{
@@ -50,6 +50,7 @@ type certificateSummary struct {
 	Name       string `json:"name,omitempty"`
 	Expiration string `json:"expiration,omitempty"`
 	CommonName string `json:"commonName,omitempty"`
+	Active     *bool  `json:"active,omitempty"`
 }
 
 type targetCertificateResult struct {
@@ -57,6 +58,18 @@ type targetCertificateResult struct {
 	Certificates []certificateSummary `json:"certificates,omitempty"`
 	Error        string               `json:"error,omitempty"`
 }
+
+type tableCell struct {
+	text  string
+	color string
+}
+
+const (
+	colorReset = "\033[0m"
+	colorGreen = "\033[32m"
+	colorGray  = "\033[90m"
+	colorRed   = "\033[31m"
+)
 
 func runGetCertificateExpiration(cmd *cobra.Command, args []string) error {
 	if expirationAllTargets && expirationTargetsRaw != "" {
@@ -165,33 +178,51 @@ func findTargetByName(name string) (Target, bool) {
 }
 
 func renderCertificatesTable(results []targetCertificateResult) {
-	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(writer, "Target\tCertificate\tExpiration\tCommonName")
+	headers := []tableCell{
+		{text: "Target"},
+		{text: "Certificate"},
+		{text: "Expiration"},
+		{text: "CommonName"},
+		{text: "Active"},
+	}
+
+	rows := make([][]tableCell, 0, len(results))
 
 	for _, result := range results {
 		if result.Error != "" {
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", result.Target, "ERROR", "-", result.Error)
+			rows = append(rows, []tableCell{
+				{text: result.Target},
+				{text: "ERROR", color: colorRed},
+				{text: "-"},
+				{text: nonEmpty(result.Error), color: colorRed},
+				{text: ""},
+			})
 			continue
 		}
 
 		if len(result.Certificates) == 0 {
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", result.Target, "(sin certificados)", "-", "-")
+			rows = append(rows, []tableCell{
+				{text: result.Target},
+				{text: "(sin certificados)"},
+				{text: "-"},
+				{text: "-"},
+				{text: ""},
+			})
 			continue
 		}
 
 		for _, cert := range result.Certificates {
-			fmt.Fprintf(
-				writer,
-				"%s\t%s\t%s\t%s\n",
-				result.Target,
-				nonEmpty(cert.Name),
-				nonEmpty(cert.Expiration),
-				nonEmpty(cert.CommonName),
-			)
+			rows = append(rows, []tableCell{
+				{text: result.Target},
+				{text: nonEmpty(cert.Name)},
+				formatExpirationCell(cert),
+				{text: nonEmpty(cert.CommonName)},
+				formatActiveCell(cert.Active),
+			})
 		}
 	}
 
-	_ = writer.Flush()
+	renderASCIIGrid(headers, rows)
 }
 
 func renderCertificatesJSON(results []targetCertificateResult) error {
@@ -205,6 +236,16 @@ func nonEmpty(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func formatActiveCell(value *bool) tableCell {
+	if value == nil {
+		return tableCell{text: ""}
+	}
+	if *value {
+		return tableCell{text: "*"}
+	}
+	return tableCell{text: ""}
 }
 
 func fetchCertificatesForTarget(ctx context.Context, target Target) ([]certificateSummary, error) {
@@ -272,7 +313,54 @@ func fetchOPNSenseCertificates(ctx context.Context, target Target) ([]certificat
 	certificates := extractCertificatesFromPayload(payload)
 	sortCertificates(certificates)
 
+	if activeID, err := fetchOPNSenseActiveCertificateRef(ctx, client, baseURL, target); err != nil {
+		if verbose {
+			fmt.Printf("[get certificate] No se pudo identificar el certificado activo de %s: %v\n", target.name, err)
+		}
+	} else {
+		markActiveCertificate(certificates, activeID)
+	}
+
 	return certificates, nil
+}
+
+func fetchOPNSenseActiveCertificateRef(ctx context.Context, client *http.Client, baseURL string, target Target) (string, error) {
+	endpoint := strings.TrimRight(baseURL, "/") + "/api/system/webgui/get"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.SetBasicAuth(target.key, target.secret)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("endpoint %s no disponible (404)", endpoint)
+	}
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("respuesta inesperada al consultar webgui (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var payload interface{}
+	decoder := json.NewDecoder(resp.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return "", fmt.Errorf("no se pudo interpretar la respuesta webgui: %w", err)
+	}
+
+	activeID := findStringByAnyKey(payload, []string{
+		"ssl-certref", "ssl_certref", "sslcertref", "ssl_certificate", "ssl_cert",
+	})
+	if strings.TrimSpace(activeID) == "" {
+		return "", fmt.Errorf("no se encontró ssl-certref en la respuesta webgui")
+	}
+	return strings.TrimSpace(activeID), nil
 }
 
 func normalizeBaseURL(raw string) (string, error) {
@@ -373,12 +461,18 @@ func buildCertificateFromMap(m map[string]interface{}) *certificateSummary {
 		return nil
 	}
 
-	return &certificateSummary{
+	result := &certificateSummary{
 		ID:         id,
 		Name:       name,
 		CommonName: commonName,
 		Expiration: expiration,
 	}
+
+	if active, ok := firstBoolValue(m, "in_use", "inUse", "active", "enabled", "isdefault", "isDefault", "selected"); ok {
+		result.Active = boolPtr(active)
+	}
+
+	return result
 }
 
 func firstNonEmptyString(m map[string]interface{}, keys ...string) string {
@@ -586,4 +680,211 @@ func sortCertificates(certs []certificateSummary) {
 		}
 		return ti.Before(tj)
 	})
+}
+
+func markActiveCertificate(certs []certificateSummary, activeID string) {
+	activeID = strings.TrimSpace(activeID)
+	if activeID == "" {
+		return
+	}
+
+	matched := false
+	for i := range certs {
+		id := strings.TrimSpace(certs[i].ID)
+		name := strings.TrimSpace(certs[i].Name)
+		if (id != "" && strings.EqualFold(id, activeID)) || (name != "" && strings.EqualFold(name, activeID)) {
+			if certs[i].Active == nil || !*certs[i].Active {
+				certs[i].Active = boolPtr(true)
+			}
+			matched = true
+		}
+	}
+
+	if !matched {
+		return
+	}
+
+	for i := range certs {
+		if certs[i].Active == nil {
+			certs[i].Active = boolPtr(false)
+		}
+	}
+}
+
+func findStringByAnyKey(value interface{}, keys []string) string {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for key, val := range typed {
+			for _, candidate := range keys {
+				if strings.EqualFold(key, candidate) {
+					if str := normalizeToString(val); str != "" {
+						return str
+					}
+				}
+			}
+		}
+		for _, val := range typed {
+			if str := findStringByAnyKey(val, keys); str != "" {
+				return str
+			}
+		}
+	case []interface{}:
+		for _, item := range typed {
+			if str := findStringByAnyKey(item, keys); str != "" {
+				return str
+			}
+		}
+	}
+	return ""
+}
+
+func firstBoolValue(m map[string]interface{}, keys ...string) (bool, bool) {
+	for _, key := range keys {
+		if value, ok := m[key]; ok {
+			if b, ok := normalizeToBool(value); ok {
+				return b, true
+			}
+			continue
+		}
+		if value, ok := lookupInsensitive(m, key); ok {
+			if b, ok := normalizeToBool(value); ok {
+				return b, true
+			}
+		}
+	}
+	return false, false
+}
+
+func normalizeToBool(value interface{}) (bool, bool) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		str := strings.ToLower(strings.TrimSpace(typed))
+		switch str {
+		case "true", "1", "yes", "y", "on", "si":
+			return true, true
+		case "false", "0", "no", "off":
+			return false, true
+		}
+	case json.Number:
+		if i, err := typed.Int64(); err == nil {
+			return i != 0, true
+		}
+		if f, err := strconv.ParseFloat(typed.String(), 64); err == nil {
+			return f != 0, true
+		}
+	case float64:
+		return typed != 0, true
+	case int:
+		return typed != 0, true
+	case int64:
+		return typed != 0, true
+	case uint64:
+		return typed != 0, true
+	}
+	return false, false
+}
+
+func boolPtr(value bool) *bool {
+	v := value
+	return &v
+}
+
+func renderASCIIGrid(headers []tableCell, rows [][]tableCell) {
+	widths := make([]int, len(headers))
+	for i, cell := range headers {
+		widths[i] = max(widths[i], runeLen(cell.text))
+	}
+
+	for _, row := range rows {
+		for i, cell := range row {
+			if i < len(widths) {
+				widths[i] = max(widths[i], runeLen(cell.text))
+			}
+		}
+	}
+
+	printTableSeparator(widths)
+	printTableRow(headers, widths)
+	printTableSeparator(widths)
+	for _, row := range rows {
+		printTableRow(row, widths)
+	}
+	printTableSeparator(widths)
+}
+
+func formatExpirationCell(cert certificateSummary) tableCell {
+	text := nonEmpty(cert.Expiration)
+	color := ""
+
+	if strings.TrimSpace(cert.Expiration) == "" || text == "-" {
+		return tableCell{text: text}
+	}
+
+	inactive := cert.Active != nil && !*cert.Active
+	expiryTime, err := parseDateString(cert.Expiration)
+	if err != nil {
+		if inactive {
+			color = colorGray
+		}
+		return tableCell{text: text, color: color}
+	}
+
+	if inactive {
+		color = colorGray
+	} else if time.Now().Before(expiryTime) {
+		color = colorGreen
+	} else {
+		color = colorRed
+	}
+
+	return tableCell{text: text, color: color}
+}
+
+func printTableSeparator(widths []int) {
+	var builder strings.Builder
+	builder.WriteString("+")
+	for _, width := range widths {
+		builder.WriteString(strings.Repeat("-", width+2))
+		builder.WriteString("+")
+	}
+	builder.WriteString("\n")
+	fmt.Print(builder.String())
+}
+
+func printTableRow(cells []tableCell, widths []int) {
+	var builder strings.Builder
+	for i, cell := range cells {
+		if i >= len(widths) {
+			continue
+		}
+		builder.WriteString("| ")
+		plain := cell.text
+		padding := widths[i] - runeLen(plain)
+		if cell.color != "" {
+			builder.WriteString(cell.color)
+			builder.WriteString(plain)
+			builder.WriteString(colorReset)
+		} else {
+			builder.WriteString(plain)
+		}
+		if padding > 0 {
+			builder.WriteString(strings.Repeat(" ", padding))
+		}
+		builder.WriteString(" ")
+	}
+	builder.WriteString("|\n")
+	fmt.Print(builder.String())
+}
+
+func runeLen(value string) int {
+	return len([]rune(value))
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
