@@ -39,7 +39,7 @@ Adds a new target system to `.env`, persisting credentials and configuration det
 - Add stronger duplicate validation.
 - Extract `.env` parsing/writing to dedicated helpers.
 
-### 2. Certificate Retrieval *(WIP)*
+### 2. Certificate Retrieval
 
 **Command**
 
@@ -53,17 +53,13 @@ Retrieves certificates for the selected targets (or all with `-A`) and prints me
 **Example output**
 
 ```
-TargetName       CertificateName        ExpirationDate       CommonName
-------------------------------------------------------------------------
-OPNSense1        webgui-cert            2026-04-05           opnsense.local
-OPNSense2        vpn-cert               2025-12-12           vpn.example.com
++----------+-------------------+---------------------+----------------------+--------+
+| Target   | Certificate       | Expiration          | CommonName           | Active |
++----------+-------------------+---------------------+----------------------+--------+
+| OPNsense | WebGUI cert       | 2026-04-05 12:00:00 | opnsense.local       | *      |
+| OPNsense | VPN backup cert   | 2025-12-12 08:30:00 | vpn.example.com      |        |
++----------+-------------------+---------------------+----------------------+--------+
 ```
-
-**TO DO**
-- Parse `.env` to resolve target selections.
-- Support multiple target types (OPNSense, etc.).
-- Implement per-type API calls (OPNSense: `/api/trust/certificates`).
-- Provide `--json` and `--table` formatting options.
 
 ### 3. Certificate Upload
 
